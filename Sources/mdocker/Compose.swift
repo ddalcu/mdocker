@@ -35,7 +35,16 @@ enum Compose {
         try FileManager.default.createDirectory(at: p.home, withIntermediateDirectories: true)
         if !FileManager.default.fileExists(atPath: p.hostsFile.path) { FileManager.default.createFile(atPath: p.hostsFile.path, contents: nil) }
         refreshHosts(p)
-        for v in p.volumes { Engine.run(["volume", "create", p.volumeName(v)], quiet: true) }
+        for (v, def) in p.volumes.sorted(by: { $0.key < $1.key }) {
+            if p.isExternal(v) {
+                guard Engine.run(["volume", "inspect", p.volumeName(v)], quiet: true) == 0 else {
+                    throw ComposeError("external volume \(p.volumeName(v)) not found")
+                }
+                continue
+            }
+            let labels = ["mdocker.project": p.name].merging(Dictionary(uniqueKeysWithValues: Project.pairs(def["labels"]).map { ($0.0, $0.1 ?? "") })) { _, new in new }
+            Engine.run(["volume", "create"] + labels.sorted(by: { $0.key < $1.key }).flatMap { ["--label", "\($0.key)=\($0.value)"] } + [p.volumeName(v)], quiet: true)
+        }
         for svc in try p.order(services) {
             if let build = p.buildArgs(svc), Engine.run(build) != 0 { return 1 }
             let args = p.runArgs(svc)
@@ -57,11 +66,16 @@ enum Compose {
     }
 
     static func down(_ p: Project, volumes: Bool) -> Int32 {
+        var anonymous: [String] = []
         for b in Engine.boxes(project: p.name) {
+            anonymous += b.anonymousVolumes
             Engine.run(["rm", "-f", b.name], quiet: true)
             print("\(b.name) removed")
         }
-        if volumes { for v in p.volumes { Engine.run(["volume", "rm", p.volumeName(v)], quiet: true) } }
+        if volumes {
+            for v in p.volumes.keys where !p.isExternal(v) { Engine.run(["volume", "rm", p.volumeName(v)], quiet: true) }
+            for v in anonymous { Engine.run(["volume", "rm", v], quiet: true) }
+        }
         try? FileManager.default.removeItem(at: p.home)
         return 0
     }

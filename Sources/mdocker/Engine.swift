@@ -42,7 +42,7 @@ enum Engine {
         while i < args.count {
             var spec: String?
             if ["-v", "--volume"].contains(args[i]), i + 1 < args.count { spec = args[i + 1]; i += 1 }
-            else if args[i].hasPrefix("--volume=") { spec = String(args[i].dropFirst(9)) }
+            else if let flag = ["--volume=", "-v="].first(where: args[i].hasPrefix) { spec = String(args[i].dropFirst(flag.count)) }
             if let src = spec?.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).first, let c = src.first, ".~/".contains(c) {
                 try? FileManager.default.createDirectory(atPath: (String(src) as NSString).expandingTildeInPath, withIntermediateDirectories: true)
             }
@@ -63,6 +63,14 @@ enum Engine {
             let id: String
             let labels: [String: String]
             let image: Image
+            let mounts: [Mount]?
+        }
+        struct Mount: Decodable {
+            struct Kind: Decodable {
+                struct Volume: Decodable { let name: String }
+                let volume: Volume?
+            }
+            let type: Kind
         }
         struct Image: Decodable { let reference: String }
         struct Status: Decodable {
@@ -76,6 +84,11 @@ enum Engine {
 
         var name: String { configuration.id }
         var service: String { configuration.labels["mdocker.service"] ?? "" }
+        /// Volumes `run -v /path` created on its own: engine-named with a UUID.
+        var anonymousVolumes: [String] {
+            (configuration.mounts ?? []).compactMap { $0.type.volume?.name }
+                .filter { UUID(uuidString: $0) != nil }
+        }
         var running: Bool { status.state == "running" }
         var ip: String? {
             status.networks?.first?.ipv4Address.split(separator: "/").first.map(String.init)

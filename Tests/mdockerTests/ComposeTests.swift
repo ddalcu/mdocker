@@ -48,7 +48,7 @@ private func project(_ yaml: String, env: [String: String] = [:]) throws -> Proj
     #expect(a.contains("demo_cache:/cache"))
     #expect(a.joined(separator: " ").contains("--entrypoint /entry.sh"))
     #expect(Array(a.suffix(4)) == ["nginx", "--x", "serve", "two words"])
-    #expect(p.volumes == ["cache"])
+    #expect(p.volumes.keys.sorted() == ["cache"])
 }
 
 @Test func hashChangesWithConfig() throws {
@@ -63,4 +63,41 @@ private func project(_ yaml: String, env: [String: String] = [:]) throws -> Proj
     #expect(interpolate("${A} ${B:-dflt} $A $$ ${C:-}", env: ["A": "x"]) == "x dflt x $ ")
     #expect(shellSplit(#"sh -c "echo hi" 'a b'"#) == ["sh", "-c", "echo hi", "a b"])
     #expect(parseEnv("# c\nK=\"v\"\nJ=1") == ["K": "v", "J": "1"])
+}
+
+@Test func translatesLongFormVolumesAndTmpfs() throws {
+    let p = try project("""
+    services:
+      s:
+        image: x
+        volumes:
+          - {type: bind, source: ./src, target: /src, read_only: true}
+          - {type: volume, source: data, target: /data}
+          - {type: volume, target: /anon}
+          - {type: tmpfs, target: /scratch}
+        tmpfs: /run
+        shm_size: 64m
+    volumes: {data: {}}
+    """)
+    let a = p.runArgs("s").joined(separator: " ")
+    #expect(a.contains("-v \(p.dir.path)/src:/src:ro"))
+    #expect(a.contains("-v demo_data:/data"))
+    #expect(a.contains("-v /anon"))
+    #expect(a.contains("--tmpfs /scratch") && a.contains("--tmpfs /run"))
+    #expect(a.contains("--shm-size 64m"))
+}
+
+@Test func topLevelVolumeNamingAndExternal() throws {
+    let p = try project("""
+    services: {s: {image: x, volumes: ["ext:/e", "named:/n", "plain:/p"]}}
+    volumes:
+      ext: {external: true}
+      named: {name: shared-name}
+      plain:
+    """)
+    #expect(p.volumeName("ext") == "ext" && p.isExternal("ext"))
+    #expect(p.volumeName("named") == "shared-name" && !p.isExternal("named"))
+    #expect(p.volumeName("plain") == "demo_plain")
+    let a = p.runArgs("s")
+    #expect(a.contains("ext:/e") && a.contains("shared-name:/n") && a.contains("demo_plain:/p"))
 }

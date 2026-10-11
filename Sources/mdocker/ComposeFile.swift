@@ -14,7 +14,7 @@ struct Project {
     let name: String
     let dir: URL
     let services: [String: Dict]
-    let volumes: [String]
+    let volumes: [String: Dict]
 
     var home: URL { FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".mdocker/\(name)") }
     var hostsFile: URL { home.appendingPathComponent("hosts") }
@@ -23,7 +23,7 @@ struct Project {
     /// Keys we translate; anything else on a service is warned about, never silently dropped.
     static let supported: Set<String> = [
         "image", "build", "command", "entrypoint", "environment", "env_file", "ports", "volumes", "depends_on",
-        "working_dir", "user", "container_name", "labels", "platform", "init", "read_only",
+        "working_dir", "user", "container_name", "labels", "platform", "init", "read_only", "tmpfs", "shm_size",
     ]
 
     static func load(file: String?, name: String?, env: [String: String] = ProcessInfo.processInfo.environment) throws -> Project {
@@ -39,7 +39,7 @@ struct Project {
             throw ComposeError("\(url.lastPathComponent): no services")
         }
         let project = sanitize(name ?? doc["name"] as? String ?? dir.lastPathComponent)
-        return Project(name: project, dir: dir, services: services, volumes: (doc["volumes"] as? Dict)?.keys.sorted() ?? [])
+        return Project(name: project, dir: dir, services: services, volumes: (doc["volumes"] as? Dict ?? [:]).mapValues { $0 as? Dict ?? [:] })
     }
 
     func warnUnsupported() {
@@ -71,7 +71,14 @@ struct Project {
     }
 
     func containerName(_ svc: String) -> String { services[svc]?["container_name"] as? String ?? "\(name)-\(svc)" }
-    func volumeName(_ v: String) -> String { "\(name)_\(v)" }
+    /// `name:` overrides the project prefix; an `external` volume is used as-is and never created or removed.
+    func volumeName(_ v: String) -> String {
+        volumes[v]?["name"] as? String ?? (isExternal(v) ? v : "\(name)_\(v)")
+    }
+    func isExternal(_ v: String) -> Bool {
+        let e = volumes[v]?["external"]
+        return e as? Bool == true || e is Dict
+    }
     func image(_ svc: String) -> String { services[svc]?["image"] as? String ?? "\(name)-\(svc)" }
 
     /// `container build` args for a service with a `build:` section, or nil.
@@ -93,7 +100,9 @@ struct Project {
         for (k, v) in Self.pairs(def["environment"]) { a += ["-e", v.map { "\(k)=\($0)" } ?? k] }
         for f in Self.list(def["env_file"]) { a += ["--env-file", path(f)] }
         for p in Self.list(def["ports"]) { a += ["-p", p] }
-        for v in Self.list(def["volumes"]) { a += ["-v", volume(v)] }
+        for v in def["volumes"] as? [Any] ?? [] { a += mount(v) }
+        for t in Self.list(def["tmpfs"]) { a += ["--tmpfs", t] }
+        if let shm = def["shm_size"] { a += ["--shm-size", "\(shm)"] }
         if let w = def["working_dir"] as? String { a += ["-w", w] }
         if let u = def["user"] as? String { a += ["-u", u] }
         if let p = def["platform"] as? String { a += ["--platform", p] }
@@ -112,6 +121,19 @@ struct Project {
     private func path(_ p: String) -> String {
         let expanded = (p as NSString).expandingTildeInPath
         return URL(fileURLWithPath: expanded, relativeTo: dir).standardizedFileURL.path
+    }
+
+    /// A short-form string, or a long-form `{type, source, target, read_only}` map, as `container run` args.
+    private func mount(_ v: Any) -> [String] {
+        guard let m = v as? Dict, let target = m["target"] as? String else { return ["-v", volume("\(v)")] }
+        let ro = m["read_only"] as? Bool == true ? ":ro" : ""
+        switch m["type"] as? String {
+        case "tmpfs": return ["--tmpfs", target]
+        case "bind": return ["-v", "\(path(m["source"] as? String ?? "")):\(target)\(ro)"]
+        default:
+            guard let source = m["source"] as? String else { return ["-v", target] }  // anonymous volume
+            return ["-v", volume("\(source):\(target)\(ro)")]
+        }
     }
 
     /// `./data:/data:ro` is a bind mount (path resolved against the compose dir); `db:/var/lib` a project-scoped named volume.

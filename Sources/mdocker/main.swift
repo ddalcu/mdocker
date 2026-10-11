@@ -29,5 +29,10 @@ if !["system", "info", "version"].contains(cmd) { Engine.ensureStarted() }
 
 // docker's `logs --tail N` is `-n N` here.
 let fixed = cmd == "logs" ? rest.map { $0 == "--tail" ? "-n" : $0.replacingOccurrences(of: "--tail=", with: "-n") } : rest
-if cmd == "run" || cmd == "create" { Engine.makeBindDirs(fixed) }
-Engine.exec((rewrites[cmd] ?? [cmd]) + fixed)
+var final = fixed
+if cmd == "run" || cmd == "create" {
+    // docker accepts `-v/host:/ctr`; container's parser does not.
+    final = fixed.flatMap { $0.hasPrefix("-v") && $0.count > 2 && !$0.hasPrefix("-v=") ? ["-v", String($0.dropFirst(2))] : [$0] }
+    Engine.makeBindDirs(final)
+}
+Engine.exec((rewrites[cmd] ?? [cmd]) + final)

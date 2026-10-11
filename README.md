@@ -49,6 +49,28 @@ per-project `/etc/hosts` (`~/.mdocker/<project>/hosts`) bind-mounted into each c
 services start — no `sudo container system dns create` needed. Services started in the same
 `depends_on` tier may not see each other until the file refreshes.
 
+## Mounts and volumes
+
+`container` already matches Docker for `-v src:dst[:ro|:rw|:z|:cached]`, `--mount` (`src`/`dst`/`ro` aliases),
+`--tmpfs [path:opts]`, named volumes (created on demand) and anonymous volumes. mdocker adds the rest:
+
+- `-v /host:/ctr` creates a missing host directory (`container` errors); `-v=…` and `-v/host:/ctr` work.
+  `--mount type=bind` with a missing path still errors, as in Docker.
+- Compose: long-form `volumes:` (`type`, `source`, `target`, `read_only`), `tmpfs:`, `shm_size`, top-level
+  `volumes:` with `name:`, `external:` and `labels:`. `down -v` removes the project's volumes and anonymous volumes,
+  never external ones.
+
+Known gaps: `--volumes-from` is unsupported by `container`; `docker run --rm` and `docker rm -v` don't remove
+anonymous volumes; the `-v` directory creation scans every argument, so a program argument that looks like `-v ./x`
+after the image name would also create `./x`.
+
+**Named volumes are ext4 images with a `lost+found` at the root**, unlike Docker's plain directories, so images that
+insist on an empty data dir fail on first start. Postgres: set `PGDATA: /var/lib/postgresql/data/pgdata`.
+
+**Known engine issue:** Node's `fs.cpSync` into a bind mount fails with `EACCES` (`cp -a`, `copyFile` and named
+volumes are fine). Seen with `ddalcu/agent-orcha`; use a named volume. Every mount form and option fails the same way,
+so this is `container`'s virtiofs, not mdocker.
+
 ## License
 
 MIT
