@@ -1,3 +1,5 @@
+![mdocker](banner.png)
+
 # mdocker
 
 A ~400-line Docker/Compose front end for Apple's [`container`](https://github.com/apple/container).
